@@ -16,7 +16,7 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    ws.send(`echo: ${message}`);
+    ws.send(message);
   }
 
   webSocketClose(ws: WebSocket, _code: number, _reason: string): void {

@@ -28,7 +28,7 @@ function send(obj: unknown) {
 function setHP(hp: number) {
   const pct = Math.max(0, Math.min(100, hp));
   hpFill.style.width = `${pct}%`;
-  hpFill.style.background = hp > 50 ? '#2ecc71' : hp > 25 ? '#f39c12' : '#e74c3c';
+  hpFill.style.background = hp > 50 ? '#7BD63A' : hp > 25 ? '#FFC83D' : '#FF5A3C';
   hpText.textContent = `HP ${hp}`;
 }
 

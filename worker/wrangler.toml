@@ -2,6 +2,7 @@ name = "demolition-derby-worker"
 main = "src/index.ts"
 compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "0c3e6784e98ec39274dc9f4b91062d4b"
 
 [[durable_objects.bindings]]
 name = "GAME_ROOM"

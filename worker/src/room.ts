@@ -2,13 +2,21 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './index';
 
 const TICK_MS = 33; // ~30 Hz
+const TICK_HZ = 1000 / TICK_MS;
 const ARENA_W = 800;
 const ARENA_H = 600;
+const CAR_RADIUS = 18;
 const TILT_FACTOR = 0.35;
 const DAMPING = 0.88;
 const MAX_SPEED = 10;
 const BOOST_IMPULSE = 12;
 const BOOST_DURATION_TICKS = 8;
+const MAX_HP = 100;
+const COLLISION_DAMAGE_FACTOR = 0.6;
+const BOOST_DAMAGE_MULT = 2.2;
+const ROUND_DURATION_TICKS = Math.round(90 * TICK_HZ);
+const COUNTDOWN_TICKS = Math.round(3 * TICK_HZ);
+const AUTO_RESTART_TICKS = Math.round(5 * TICK_HZ);
 
 interface PlayerState {
   id: string;
@@ -18,8 +26,16 @@ interface PlayerState {
   vy: number;
   heading: number;
   boostTicks: number;
+  hp: number;
+  eliminated: boolean;
 }
 
+interface HitEvent {
+  targetId: string;
+  damage: number;
+}
+
+type RoundPhase = 'lobby' | 'countdown' | 'active' | 'ended';
 type WsTag = { type: 'controller'; id: string } | { type: 'screen' };
 
 export class GameRoom extends DurableObject<Env> {
@@ -27,6 +43,11 @@ export class GameRoom extends DurableObject<Env> {
   private readonly players = new Map<string, PlayerState>();
   private readonly pendingTilts = new Map<string, { beta: number; gamma: number }>();
   private readonly pendingBoosts = new Set<string>();
+
+  private roundPhase: RoundPhase = 'lobby';
+  private roundTickCount = 0;
+  private winnerId: string | null = null;
+  private endReason: 'last_standing' | 'timeout' | null = null;
 
   private startLoop(): void {
     if (this.tickInterval) return;
@@ -39,22 +60,90 @@ export class GameRoom extends DurableObject<Env> {
     this.tickInterval = null;
   }
 
+  private spawnPosition(): { x: number; y: number } {
+    return {
+      x: 100 + Math.random() * (ARENA_W - 200),
+      y: 80 + Math.random() * (ARENA_H - 160),
+    };
+  }
+
+  private tryStartCountdown(): void {
+    if (this.roundPhase !== 'lobby') return;
+    if (this.players.size >= 2) {
+      this.roundPhase = 'countdown';
+      this.roundTickCount = 0;
+    }
+  }
+
+  private resolveCollisions(hits: HitEvent[]): void {
+    const alive = [...this.players.values()].filter(p => !p.eliminated);
+    for (let i = 0; i < alive.length; i++) {
+      for (let j = i + 1; j < alive.length; j++) {
+        const a = alive[i], b = alive[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = CAR_RADIUS * 2;
+        if (dist >= minDist || dist < 0.001) continue;
+
+        // Separate overlapping cars
+        const overlap = minDist - dist;
+        const nx = dx / dist;
+        const ny = dy / dist;
+        a.x -= nx * overlap * 0.5;
+        a.y -= ny * overlap * 0.5;
+        b.x += nx * overlap * 0.5;
+        b.y += ny * overlap * 0.5;
+
+        // Relative velocity along collision normal
+        const relVn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+        if (relVn >= 0) continue; // already separating
+
+        // Equal-mass elastic impulse
+        const impulse = -relVn;
+        a.vx -= impulse * nx;
+        a.vy -= impulse * ny;
+        b.vx += impulse * nx;
+        b.vy += impulse * ny;
+
+        // Damage proportional to impact speed
+        const speed = Math.abs(relVn);
+        const aIsBoosting = a.boostTicks > 0;
+        const bIsBoosting = b.boostTicks > 0;
+        const base = speed * COLLISION_DAMAGE_FACTOR;
+        const aDmg = Math.round(base * (bIsBoosting ? BOOST_DAMAGE_MULT : 1));
+        const bDmg = Math.round(base * (aIsBoosting ? BOOST_DAMAGE_MULT : 1));
+
+        if (aDmg > 0) {
+          a.hp = Math.max(0, a.hp - aDmg);
+          hits.push({ targetId: a.id, damage: aDmg });
+        }
+        if (bDmg > 0) {
+          b.hp = Math.max(0, b.hp - bDmg);
+          hits.push({ targetId: b.id, damage: bDmg });
+        }
+      }
+    }
+  }
+
   private tick(): void {
+    const hits: HitEvent[] = [];
+
+    // Move all non-eliminated players
     for (const [id, p] of this.players) {
+      if (p.eliminated) continue;
       const tilt = this.pendingTilts.get(id);
       const boosting = this.pendingBoosts.has(id);
 
       if (tilt) {
-        // gamma = side tilt → x axis; beta = forward/back → y axis
         p.vx += tilt.gamma * TILT_FACTOR;
         p.vy += tilt.beta * TILT_FACTOR;
         p.heading = Math.atan2(p.vy, p.vx);
       }
 
       if (boosting) {
-        const angle = p.heading;
-        p.vx += Math.cos(angle) * BOOST_IMPULSE;
-        p.vy += Math.sin(angle) * BOOST_IMPULSE;
+        p.vx += Math.cos(p.heading) * BOOST_IMPULSE;
+        p.vy += Math.sin(p.heading) * BOOST_IMPULSE;
         p.boostTicks = BOOST_DURATION_TICKS;
         this.pendingBoosts.delete(id);
       }
@@ -73,29 +162,102 @@ export class GameRoom extends DurableObject<Env> {
       p.x += p.vx;
       p.y += p.vy;
 
-      // Bounce off walls
-      if (p.x < 20) { p.x = 20; p.vx = Math.abs(p.vx); }
-      if (p.x > ARENA_W - 20) { p.x = ARENA_W - 20; p.vx = -Math.abs(p.vx); }
-      if (p.y < 20) { p.y = 20; p.vy = Math.abs(p.vy); }
-      if (p.y > ARENA_H - 20) { p.y = ARENA_H - 20; p.vy = -Math.abs(p.vy); }
+      const r = CAR_RADIUS;
+      if (p.x < 10 + r) { p.x = 10 + r; p.vx = Math.abs(p.vx); }
+      if (p.x > ARENA_W - 10 - r) { p.x = ARENA_W - 10 - r; p.vx = -Math.abs(p.vx); }
+      if (p.y < 10 + r) { p.y = 10 + r; p.vy = Math.abs(p.vy); }
+      if (p.y > ARENA_H - 10 - r) { p.y = ARENA_H - 10 - r; p.vy = -Math.abs(p.vy); }
     }
 
-    this.broadcast();
+    // Round lifecycle
+    if (this.roundPhase === 'countdown') {
+      this.roundTickCount++;
+      if (this.roundTickCount >= COUNTDOWN_TICKS) {
+        this.roundPhase = 'active';
+        this.roundTickCount = 0;
+        for (const p of this.players.values()) {
+          p.hp = MAX_HP;
+          p.eliminated = false;
+        }
+      }
+    } else if (this.roundPhase === 'active') {
+      this.roundTickCount++;
+      this.resolveCollisions(hits);
+
+      for (const p of this.players.values()) {
+        if (!p.eliminated && p.hp <= 0) {
+          p.eliminated = true;
+          p.vx = 0;
+          p.vy = 0;
+        }
+      }
+
+      const alive = [...this.players.values()].filter(p => !p.eliminated);
+      if (alive.length <= 1 || this.roundTickCount >= ROUND_DURATION_TICKS) {
+        this.roundPhase = 'ended';
+        this.roundTickCount = 0;
+        if (alive.length === 1) {
+          this.winnerId = alive[0].id;
+          this.endReason = 'last_standing';
+        } else if (alive.length === 0) {
+          this.winnerId = null;
+          this.endReason = 'last_standing';
+        } else {
+          // Timeout: most HP wins
+          const winner = alive.reduce((a, b) => a.hp >= b.hp ? a : b);
+          this.winnerId = winner.id;
+          this.endReason = 'timeout';
+        }
+      }
+    } else if (this.roundPhase === 'ended') {
+      this.roundTickCount++;
+      if (this.roundTickCount >= AUTO_RESTART_TICKS) {
+        this.restartRound();
+      }
+    }
+
+    this.broadcast(hits);
   }
 
-  private broadcast(): void {
+  private restartRound(): void {
+    for (const p of this.players.values()) {
+      const pos = this.spawnPosition();
+      p.x = pos.x;
+      p.y = pos.y;
+      p.vx = 0;
+      p.vy = 0;
+      p.hp = MAX_HP;
+      p.eliminated = false;
+      p.boostTicks = 0;
+    }
+    this.winnerId = null;
+    this.endReason = null;
+    this.roundTickCount = 0;
+    this.roundPhase = this.players.size >= 2 ? 'countdown' : 'lobby';
+  }
+
+  private broadcast(hits: HitEvent[] = []): void {
+    const countdownSecs = this.roundPhase === 'countdown'
+      ? Math.ceil((COUNTDOWN_TICKS - this.roundTickCount) / TICK_HZ)
+      : 0;
+    const roundSecs = this.roundPhase === 'active'
+      ? Math.floor(this.roundTickCount / TICK_HZ)
+      : 0;
+
     const payload = JSON.stringify({
       type: 'state',
-      players: [...this.players.values()].map(({ id, x, y, heading, boostTicks }) => ({
-        id,
-        x,
-        y,
-        heading,
-        boost: boostTicks > 0,
+      phase: this.roundPhase,
+      countdownSecs,
+      roundSecs,
+      winnerId: this.winnerId,
+      endReason: this.endReason,
+      players: [...this.players.values()].map(({ id, x, y, heading, boostTicks, hp, eliminated }) => ({
+        id, x, y, heading, boost: boostTicks > 0, hp, eliminated,
       })),
+      hits,
     });
 
-    for (const ws of this.ctx.getWebSockets('screen')) {
+    for (const ws of this.ctx.getWebSockets()) {
       try { ws.send(payload); } catch { /* client gone */ }
     }
   }
@@ -116,26 +278,33 @@ export class GameRoom extends DurableObject<Env> {
       this.ctx.acceptWebSocket(server, ['controller']);
       server.serializeAttachment({ type: 'controller', id } satisfies WsTag);
 
+      const pos = this.spawnPosition();
       this.players.set(id, {
         id,
-        x: ARENA_W / 2 + (Math.random() - 0.5) * 200,
-        y: ARENA_H / 2 + (Math.random() - 0.5) * 200,
+        x: pos.x,
+        y: pos.y,
         vx: 0,
         vy: 0,
         heading: 0,
         boostTicks: 0,
+        hp: MAX_HP,
+        // Mid-round joiners spectate
+        eliminated: this.roundPhase === 'active',
       });
 
-      // Tell the controller its ID after the response is returned
       queueMicrotask(() => {
-        try { server.send(JSON.stringify({ type: 'assigned', id })); } catch { /* race */ }
+        try {
+          server.send(JSON.stringify({ type: 'assigned', id, spectating: this.roundPhase === 'active' }));
+        } catch { /* race */ }
       });
 
       this.startLoop();
+      if (this.roundPhase === 'lobby') {
+        queueMicrotask(() => this.tryStartCountdown());
+      }
     } else {
       this.ctx.acceptWebSocket(server, ['screen']);
       server.serializeAttachment({ type: 'screen' } satisfies WsTag);
-      // Send current state immediately
       queueMicrotask(() => this.broadcast());
     }
 
@@ -144,7 +313,6 @@ export class GameRoom extends DurableObject<Env> {
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     const tag = ws.deserializeAttachment() as WsTag;
-    if (tag.type !== 'controller') return;
 
     let msg: Record<string, unknown>;
     try {
@@ -153,13 +321,20 @@ export class GameRoom extends DurableObject<Env> {
       return;
     }
 
-    if (msg.type === 'tilt') {
-      this.pendingTilts.set(tag.id, {
-        beta: Number(msg.beta) || 0,
-        gamma: Number(msg.gamma) || 0,
-      });
-    } else if (msg.type === 'boost') {
-      this.pendingBoosts.add(tag.id);
+    if (tag.type === 'controller') {
+      if (msg.type === 'tilt') {
+        this.pendingTilts.set(tag.id, {
+          beta: Number(msg.beta) || 0,
+          gamma: Number(msg.gamma) || 0,
+        });
+      } else if (msg.type === 'boost') {
+        this.pendingBoosts.add(tag.id);
+      }
+    }
+
+    if (msg.type === 'restart' && this.roundPhase === 'ended') {
+      this.restartRound();
+      this.broadcast();
     }
   }
 
@@ -169,11 +344,24 @@ export class GameRoom extends DurableObject<Env> {
       this.players.delete(tag.id);
       this.pendingTilts.delete(tag.id);
       this.pendingBoosts.delete(tag.id);
+
+      if (this.roundPhase === 'active') {
+        const alive = [...this.players.values()].filter(p => !p.eliminated);
+        if (alive.length <= 1) {
+          this.roundPhase = 'ended';
+          this.winnerId = alive.length === 1 ? alive[0].id : null;
+          this.endReason = 'last_standing';
+          this.roundTickCount = 0;
+        }
+      }
+
+      if (this.roundPhase === 'countdown' && this.players.size < 2) {
+        this.roundPhase = 'lobby';
+        this.roundTickCount = 0;
+      }
     }
 
-    const activeControllers = this.ctx.getWebSockets('controller').length;
-    if (activeControllers === 0) this.stopLoop();
-    // Notify screens of disconnect
+    if (this.ctx.getWebSockets('controller').length === 0) this.stopLoop();
     this.broadcast();
   }
 

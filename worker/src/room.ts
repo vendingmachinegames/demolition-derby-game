@@ -18,6 +18,13 @@ const ROUND_DURATION_TICKS = Math.round(90 * TICK_HZ);
 const COUNTDOWN_TICKS = Math.round(3 * TICK_HZ);
 const AUTO_RESTART_TICKS = Math.round(5 * TICK_HZ);
 
+function genRoomCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
 interface PlayerState {
   id: string;
   x: number;
@@ -43,6 +50,9 @@ export class GameRoom extends DurableObject<Env> {
   private readonly players = new Map<string, PlayerState>();
   private readonly pendingTilts = new Map<string, { beta: number; gamma: number }>();
   private readonly pendingBoosts = new Set<string>();
+  private readonly playerLabels = new Map<string, string>();
+  private nextLabelIndex = 1;
+  private readonly roomCode = genRoomCode();
 
   private roundPhase: RoundPhase = 'lobby';
   private roundTickCount = 0;
@@ -247,12 +257,15 @@ export class GameRoom extends DurableObject<Env> {
     const payload = JSON.stringify({
       type: 'state',
       phase: this.roundPhase,
+      roomCode: this.roomCode,
       countdownSecs,
       roundSecs,
       winnerId: this.winnerId,
       endReason: this.endReason,
       players: [...this.players.values()].map(({ id, x, y, heading, boostTicks, hp, eliminated }) => ({
-        id, x, y, heading, boost: boostTicks > 0, hp, eliminated,
+        id,
+        label: this.playerLabels.get(id) ?? id,
+        x, y, heading, boost: boostTicks > 0, hp, eliminated,
       })),
       hits,
     });
@@ -278,6 +291,9 @@ export class GameRoom extends DurableObject<Env> {
       this.ctx.acceptWebSocket(server, ['controller']);
       server.serializeAttachment({ type: 'controller', id } satisfies WsTag);
 
+      const label = `P${this.nextLabelIndex++}`;
+      this.playerLabels.set(id, label);
+
       const pos = this.spawnPosition();
       this.players.set(id, {
         id,
@@ -294,7 +310,13 @@ export class GameRoom extends DurableObject<Env> {
 
       queueMicrotask(() => {
         try {
-          server.send(JSON.stringify({ type: 'assigned', id, spectating: this.roundPhase === 'active' }));
+          server.send(JSON.stringify({
+            type: 'assigned',
+            id,
+            label,
+            roomCode: this.roomCode,
+            spectating: this.roundPhase === 'active',
+          }));
         } catch { /* race */ }
       });
 
@@ -344,6 +366,7 @@ export class GameRoom extends DurableObject<Env> {
       this.players.delete(tag.id);
       this.pendingTilts.delete(tag.id);
       this.pendingBoosts.delete(tag.id);
+      this.playerLabels.delete(tag.id);
 
       if (this.roundPhase === 'active') {
         const alive = [...this.players.values()].filter(p => !p.eliminated);

@@ -25,6 +25,7 @@ const PLAYER_COLORS = [
 
 interface PlayerSnapshot {
   id: string;
+  label: string;
   x: number;
   y: number;
   heading: number;
@@ -41,6 +42,7 @@ interface HitEvent {
 interface StateMsg {
   type: 'state';
   phase: 'lobby' | 'countdown' | 'active' | 'ended';
+  roomCode: string;
   countdownSecs: number;
   roundSecs: number;
   winnerId: string | null;
@@ -290,17 +292,55 @@ function drawCountdown(ctx: CanvasRenderingContext2D, secs: number) {
   ctx.textBaseline = 'alphabetic';
 }
 
-function drawLobby(ctx: CanvasRenderingContext2D, playerCount: number) {
-  const msg = playerCount < 2 ? 'WAITING FOR PLAYERS…' : 'GET READY!';
-  ctx.font = 'bold 32px Impact, "Arial Black", sans-serif';
+function drawLobby(ctx: CanvasRenderingContext2D, players: PlayerSnapshot[]) {
+  const cx = ARENA_W / 2;
+  const cy = ARENA_H / 2;
+
+  const msg = players.length < 2 ? 'WAITING FOR PLAYERS…' : 'GET READY!';
+  ctx.font = 'bold 36px Impact, "Arial Black", sans-serif';
   ctx.textAlign = 'center';
   ctx.fillStyle = ASPHALT;
-  ctx.fillText(msg, ARENA_W / 2 + 2, ARENA_H / 2 + 2);
+  ctx.fillText(msg, cx + 2, cy - 70 + 2);
   ctx.fillStyle = CRAYON_BLUE;
-  ctx.fillText(msg, ARENA_W / 2, ARENA_H / 2);
-  ctx.fillStyle = 'rgba(58,63,71,0.6)';
-  ctx.font = '16px "Arial Black", Impact, sans-serif';
-  ctx.fillText('scan QR to join →', ARENA_W / 2, ARENA_H / 2 + 38);
+  ctx.fillText(msg, cx, cy - 70);
+
+  // Chunky player list — color swatch + label
+  const rowH = 46;
+  const startY = cy - 30;
+  const swatchW = 36, swatchH = 28, radius = 6;
+  const labelX = cx - 110;
+
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    const color = colorFor(p.id);
+    const rowY = startY + i * rowH;
+
+    // Row background
+    ctx.fillStyle = 'rgba(58,63,71,0.55)';
+    ctx.beginPath();
+    ctx.roundRect(cx - 120, rowY - 4, 240, rowH - 6, 8);
+    ctx.fill();
+
+    // Color swatch
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(labelX, rowY + (rowH - 6) / 2 - swatchH / 2, swatchW, swatchH, radius);
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = CREAM;
+    ctx.font = 'bold 22px Impact, "Arial Black", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(p.label, labelX + swatchW + 12, rowY + (rowH - 6) / 2 + 8);
+    ctx.textAlign = 'center';
+  }
+
+  if (players.length === 0) {
+    ctx.fillStyle = 'rgba(255,244,224,0.35)';
+    ctx.font = '15px "Arial Black", Impact, sans-serif';
+    ctx.fillText('no players yet — scan the QR!', cx, startY + 18);
+  }
+
   ctx.textAlign = 'left';
 }
 
@@ -362,9 +402,14 @@ function drawTimer(ctx: CanvasRenderingContext2D, roundSecs: number) {
 
 async function renderQR(canvas: HTMLCanvasElement) {
   const controllerUrl = `${window.location.origin}/controller`;
+  const urlHintEl = document.getElementById('join-url');
+  if (urlHintEl) {
+    const host = window.location.host;
+    urlHintEl.textContent = `${host}/controller`;
+  }
   try {
     await QRCode.toCanvas(canvas, controllerUrl, {
-      width: 140,
+      width: 160,
       margin: 1,
       color: { dark: ASPHALT, light: CREAM },
     });
@@ -376,10 +421,12 @@ async function renderQR(canvas: HTMLCanvasElement) {
 function connect(arenaCanvas: HTMLCanvasElement) {
   const ctx = arenaCanvas.getContext('2d')!;
   const statusEl = document.getElementById('status')!;
+  const roomCodeEl = document.getElementById('room-code')!;
 
   let state: StateMsg = {
     type: 'state',
     phase: 'lobby',
+    roomCode: '',
     countdownSecs: 0,
     roundSecs: 0,
     winnerId: null,
@@ -404,6 +451,9 @@ function connect(arenaCanvas: HTMLCanvasElement) {
       const msg = JSON.parse(ev.data) as StateMsg;
       if (msg.type === 'state') {
         if (msg.hits && msg.hits.length > 0) shakeFrames = 6;
+        if (msg.roomCode && msg.roomCode !== roomCodeEl.textContent) {
+          roomCodeEl.textContent = msg.roomCode;
+        }
         state = msg;
       }
     } catch { /* ignore */ }
@@ -424,7 +474,7 @@ function connect(arenaCanvas: HTMLCanvasElement) {
     } else if (state.phase === 'countdown') {
       drawCountdown(ctx, state.countdownSecs);
     } else if (state.phase === 'lobby') {
-      drawLobby(ctx, state.players.length);
+      drawLobby(ctx, state.players);
     } else if (state.phase === 'ended') {
       const restartIn = Math.max(0, 5 - Math.floor(state.roundSecs));
       drawWinner(ctx, state.winnerId, state.endReason, restartIn);

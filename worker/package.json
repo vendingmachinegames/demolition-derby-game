@@ -1,0 +1,15 @@
+{
+  "name": "@demolition-derby/worker",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240412.0",
+    "typescript": "^5.4.5",
+    "wrangler": "^4.0.0"
+  }
+}

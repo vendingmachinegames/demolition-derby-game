@@ -6,15 +6,15 @@
     <title>Demolition Derby — Screen</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { background: #0d0d1a; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
-      canvas#arena { display: block; image-rendering: pixelated; }
+      body { background: #3A3F47; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+      canvas#arena { display: block; }
       #qr-wrap {
         position: fixed; bottom: 16px; right: 16px;
-        background: rgba(0,0,0,0.6); border-radius: 8px; padding: 8px;
+        background: #3A3F47; border: 3px solid #3DA9FF; border-radius: 10px; padding: 10px;
         display: flex; flex-direction: column; align-items: center; gap: 4px;
       }
-      #qr-wrap span { color: #fff; font: 11px monospace; }
-      #status { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); color: #e94560; font: 14px monospace; }
+      #qr-wrap span { color: #FFF4E0; font: bold 11px Impact, "Arial Black", sans-serif; letter-spacing: 0.05em; }
+      #status { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); color: #FFC83D; font: bold 14px Impact, "Arial Black", sans-serif; }
     </style>
   </head>
   <body>

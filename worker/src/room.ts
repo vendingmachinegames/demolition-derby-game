@@ -22,13 +22,11 @@ interface PlayerState {
 
 type WsTag = { type: 'controller'; id: string } | { type: 'screen' };
 
-// Shared world state (survives tilt events arriving between ticks)
-const players = new Map<string, PlayerState>();
-const pendingTilts = new Map<string, { beta: number; gamma: number }>();
-const pendingBoosts = new Set<string>();
-
 export class GameRoom extends DurableObject<Env> {
   private tickInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly players = new Map<string, PlayerState>();
+  private readonly pendingTilts = new Map<string, { beta: number; gamma: number }>();
+  private readonly pendingBoosts = new Set<string>();
 
   private startLoop(): void {
     if (this.tickInterval) return;
@@ -42,9 +40,9 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   private tick(): void {
-    for (const [id, p] of players) {
-      const tilt = pendingTilts.get(id);
-      const boosting = pendingBoosts.has(id);
+    for (const [id, p] of this.players) {
+      const tilt = this.pendingTilts.get(id);
+      const boosting = this.pendingBoosts.has(id);
 
       if (tilt) {
         // gamma = side tilt → x axis; beta = forward/back → y axis
@@ -58,7 +56,7 @@ export class GameRoom extends DurableObject<Env> {
         p.vx += Math.cos(angle) * BOOST_IMPULSE;
         p.vy += Math.sin(angle) * BOOST_IMPULSE;
         p.boostTicks = BOOST_DURATION_TICKS;
-        pendingBoosts.delete(id);
+        this.pendingBoosts.delete(id);
       }
 
       if (p.boostTicks > 0) p.boostTicks--;
@@ -88,7 +86,7 @@ export class GameRoom extends DurableObject<Env> {
   private broadcast(): void {
     const payload = JSON.stringify({
       type: 'state',
-      players: [...players.values()].map(({ id, x, y, heading, boostTicks }) => ({
+      players: [...this.players.values()].map(({ id, x, y, heading, boostTicks }) => ({
         id,
         x,
         y,
@@ -118,7 +116,7 @@ export class GameRoom extends DurableObject<Env> {
       this.ctx.acceptWebSocket(server, ['controller']);
       server.serializeAttachment({ type: 'controller', id } satisfies WsTag);
 
-      players.set(id, {
+      this.players.set(id, {
         id,
         x: ARENA_W / 2 + (Math.random() - 0.5) * 200,
         y: ARENA_H / 2 + (Math.random() - 0.5) * 200,
@@ -156,21 +154,21 @@ export class GameRoom extends DurableObject<Env> {
     }
 
     if (msg.type === 'tilt') {
-      pendingTilts.set(tag.id, {
+      this.pendingTilts.set(tag.id, {
         beta: Number(msg.beta) || 0,
         gamma: Number(msg.gamma) || 0,
       });
     } else if (msg.type === 'boost') {
-      pendingBoosts.add(tag.id);
+      this.pendingBoosts.add(tag.id);
     }
   }
 
   webSocketClose(ws: WebSocket, _code: number, _reason: string): void {
     const tag = ws.deserializeAttachment() as WsTag;
     if (tag.type === 'controller') {
-      players.delete(tag.id);
-      pendingTilts.delete(tag.id);
-      pendingBoosts.delete(tag.id);
+      this.players.delete(tag.id);
+      this.pendingTilts.delete(tag.id);
+      this.pendingBoosts.delete(tag.id);
     }
 
     const activeControllers = this.ctx.getWebSockets('controller').length;

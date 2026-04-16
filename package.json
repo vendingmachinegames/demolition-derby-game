@@ -1,0 +1,10 @@
+{
+  "name": "demolition-derby-game",
+  "private": true,
+  "workspaces": ["client", "worker"],
+  "scripts": {
+    "build": "npm -w client run build",
+    "dev:client": "npm -w client run dev",
+    "dev:worker": "npm -w worker run dev"
+  }
+}

@@ -2,16 +2,26 @@ const WORKER_URL = (import.meta.env.VITE_WORKER_URL ?? 'ws://localhost:8787').re
 const TILT_HZ = 30;
 const TILT_INTERVAL = Math.floor(1000 / TILT_HZ);
 
+const PLAYER_COLORS = [
+  '#FF5A3C', '#FFC83D', '#3DA9FF', '#7BD63A',
+  '#FF8C42', '#C46FFF', '#FF5AB8', '#4DFFC4',
+];
+
 const statusEl = document.getElementById('status')!;
 const boostBtn = document.getElementById('boost') as HTMLButtonElement;
 const startOverlay = document.getElementById('start-overlay')!;
 const eliminatedOverlay = document.getElementById('eliminated-overlay')!;
+const joinConfirm = document.getElementById('join-confirm')!;
+const joinChip = document.getElementById('join-chip') as HTMLElement;
+const joinLabel = document.getElementById('join-label')!;
 const hpFill = document.getElementById('hp-fill') as HTMLElement;
 const hpText = document.getElementById('hp-text') as HTMLElement;
 const roundInfoEl = document.getElementById('round-info')!;
 
 let ws: WebSocket | null = null;
 let myId: string | null = null;
+let myLabel: string | null = null;
+let myColorIndex = 0;
 let lastTiltSent = 0;
 let motionGranted = false;
 
@@ -41,12 +51,13 @@ function onOrientation(e: DeviceOrientationEvent) {
 }
 
 function connect() {
-  updateStatus('Connecting…');
+  updateStatus('Joining…');
   ws = new WebSocket(`${WORKER_URL}/ws?type=controller`);
 
-  ws.onopen = () => updateStatus(myId ? `Car: ${myId}` : 'Connected');
+  ws.onopen = () => updateStatus('Joining…');
   ws.onclose = () => {
     updateStatus('Disconnected — reconnecting…');
+    joinConfirm.style.display = 'none';
     ws = null;
     setTimeout(connect, 2000);
   };
@@ -58,9 +69,22 @@ function connect() {
 
       if (msg.type === 'assigned') {
         myId = msg.id as string;
-        updateStatus(`Car: ${myId}`);
+        myLabel = (msg.label as string) ?? myId;
+        // Derive color index from label number (P1→0, P2→1, …)
+        const num = parseInt((myLabel.match(/\d+/) ?? ['1'])[0], 10) - 1;
+        myColorIndex = num % PLAYER_COLORS.length;
+        const color = PLAYER_COLORS[myColorIndex];
+
+        updateStatus('');
+        joinChip.style.background = color;
+        joinLabel.textContent = `YOU'RE IN! ${myLabel}`;
+        joinConfirm.style.display = 'flex';
+        setTimeout(() => { joinConfirm.style.display = 'none'; }, 3000);
+
         if (msg.spectating) {
           roundInfoEl.textContent = 'Round in progress — you join next round';
+        } else {
+          roundInfoEl.textContent = 'Get ready!';
         }
       }
 

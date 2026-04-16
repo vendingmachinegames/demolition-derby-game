@@ -3,17 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Demolition Derby</title>
+    <title>Demolition Derby — Screen</title>
     <style>
-      body { font-family: monospace; background: #111; color: #0f0; padding: 1rem; }
-      #log { border: 1px solid #0f0; padding: 0.5rem; height: 300px; overflow-y: auto; }
-      #status { margin-bottom: 0.5rem; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { background: #0d0d1a; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+      canvas#arena { display: block; image-rendering: pixelated; }
+      #qr-wrap {
+        position: fixed; bottom: 16px; right: 16px;
+        background: rgba(0,0,0,0.6); border-radius: 8px; padding: 8px;
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+      }
+      #qr-wrap span { color: #fff; font: 11px monospace; }
+      #status { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); color: #e94560; font: 14px monospace; }
     </style>
   </head>
   <body>
-    <h1>Demolition Derby — WS Smoke Test</h1>
-    <div id="status">Connecting...</div>
-    <div id="log"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <canvas id="arena" width="800" height="600"></canvas>
+    <div id="qr-wrap">
+      <canvas id="qr"></canvas>
+      <span>scan to join</span>
+    </div>
+    <div id="status">Connecting…</div>
+    <script type="module" src="/src/screen.ts"></script>
   </body>
 </html>

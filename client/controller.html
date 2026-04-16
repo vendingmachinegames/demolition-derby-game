@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Demolition Derby — Controller</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; overflow: hidden; touch-action: none; }
+      body {
+        background: #0d0d1a;
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: space-between; padding: 24px 16px 40px;
+        font-family: monospace;
+        color: #fff;
+        user-select: none;
+      }
+      #status { font-size: 14px; color: #888; min-height: 20px; }
+      #tilt-indicator {
+        flex: 1; display: flex; align-items: center; justify-content: center;
+        font-size: 48px; letter-spacing: 0.1em; opacity: 0.15;
+        pointer-events: none;
+      }
+      #boost {
+        width: min(90vw, 360px); height: 120px; border-radius: 20px;
+        background: #e94560; border: none; color: #fff;
+        font-size: 36px; font-weight: bold; font-family: monospace;
+        letter-spacing: 0.1em; cursor: pointer;
+        transition: transform 0.05s, background 0.05s;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: none;
+      }
+      #boost.active { transform: scale(0.96); background: #ff7043; }
+      #start-overlay {
+        position: fixed; inset: 0; background: #0d0d1a;
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 24px; z-index: 100;
+        cursor: pointer;
+      }
+      #start-overlay h1 { font-size: 28px; color: #e94560; }
+      #start-overlay p { font-size: 16px; color: #888; text-align: center; max-width: 280px; }
+      #start-overlay .tap-hint {
+        font-size: 20px; color: #fff; animation: pulse 1.5s ease-in-out infinite;
+      }
+      @keyframes pulse { 0%,100% { opacity: 0.5 } 50% { opacity: 1 } }
+    </style>
+  </head>
+  <body>
+    <div id="start-overlay">
+      <h1>DEMOLITION DERBY</h1>
+      <p>Tilt your phone to steer. Tap BOOST to charge.</p>
+      <div class="tap-hint">TAP TO START</div>
+    </div>
+
+    <div id="status"></div>
+    <div id="tilt-indicator">TILT TO DRIVE</div>
+    <button id="boost">BOOST</button>
+
+    <script type="module" src="/src/controller.ts"></script>
+  </body>
+</html>

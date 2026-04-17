@@ -6,10 +6,11 @@ const TICK_HZ = 1000 / TICK_MS;
 const ARENA_W = 800;
 const ARENA_H = 600;
 const CAR_RADIUS = 18;
-const TILT_FACTOR = 0.35;
-const DAMPING = 0.88;
-const MAX_SPEED = 10;
-const BOOST_IMPULSE = 12;
+const TURN_RATE = 0.10;       // rad/tick; full tilt (±60°) → ~172°/s at 30 Hz
+const BASE_SPEED = 3.5;       // px/tick constant forward movement
+const IMPULSE_DAMPING = 0.82; // decay for collision/boost impulse vectors
+const MAX_SPEED = 14;
+const BOOST_IMPULSE = 14;
 const BOOST_DURATION_TICKS = 8;
 const MAX_HP = 100;
 const COLLISION_DAMAGE_FACTOR = 0.6;
@@ -31,6 +32,8 @@ interface PlayerState {
   y: number;
   vx: number;
   vy: number;
+  ix: number; // collision/boost impulse x (damped separately)
+  iy: number; // collision/boost impulse y (damped separately)
   heading: number;
   boostTicks: number;
   hp: number;
@@ -109,12 +112,12 @@ export class GameRoom extends DurableObject<Env> {
         const relVn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
         if (relVn >= 0) continue; // already separating
 
-        // Equal-mass elastic impulse
+        // Equal-mass elastic impulse — applied to impulse vectors so heading control is unaffected
         const impulse = -relVn;
-        a.vx -= impulse * nx;
-        a.vy -= impulse * ny;
-        b.vx += impulse * nx;
-        b.vy += impulse * ny;
+        a.ix -= impulse * nx;
+        a.iy -= impulse * ny;
+        b.ix += impulse * nx;
+        b.iy += impulse * ny;
 
         // Damage proportional to impact speed
         const speed = Math.abs(relVn);
@@ -146,22 +149,29 @@ export class GameRoom extends DurableObject<Env> {
       const boosting = this.pendingBoosts.has(id);
 
       if (tilt) {
-        p.vx += tilt.gamma * TILT_FACTOR;
-        p.vy += tilt.beta * TILT_FACTOR;
-        p.heading = Math.atan2(p.vy, p.vx);
+        // Heading-based steering: gamma (left/right tilt) turns the car directly.
+        // Dead zone ±3° prevents jitter; clamp normalizes to [-1, 1] at ±60°.
+        const rawGamma = Math.abs(tilt.gamma) < 3 ? 0 : tilt.gamma;
+        const steer = Math.max(-1, Math.min(1, rawGamma / 60));
+        p.heading += steer * TURN_RATE;
       }
 
       if (boosting) {
-        p.vx += Math.cos(p.heading) * BOOST_IMPULSE;
-        p.vy += Math.sin(p.heading) * BOOST_IMPULSE;
+        p.ix += Math.cos(p.heading) * BOOST_IMPULSE;
+        p.iy += Math.sin(p.heading) * BOOST_IMPULSE;
         p.boostTicks = BOOST_DURATION_TICKS;
         this.pendingBoosts.delete(id);
       }
 
       if (p.boostTicks > 0) p.boostTicks--;
 
-      p.vx *= DAMPING;
-      p.vy *= DAMPING;
+      // Decay collision/boost impulse vectors
+      p.ix *= IMPULSE_DAMPING;
+      p.iy *= IMPULSE_DAMPING;
+
+      // Effective velocity = constant forward movement + decaying impulse
+      p.vx = Math.cos(p.heading) * BASE_SPEED + p.ix;
+      p.vy = Math.sin(p.heading) * BASE_SPEED + p.iy;
 
       const speed = Math.hypot(p.vx, p.vy);
       if (speed > MAX_SPEED) {
@@ -173,10 +183,10 @@ export class GameRoom extends DurableObject<Env> {
       p.y += p.vy;
 
       const r = CAR_RADIUS;
-      if (p.x < 10 + r) { p.x = 10 + r; p.vx = Math.abs(p.vx); }
-      if (p.x > ARENA_W - 10 - r) { p.x = ARENA_W - 10 - r; p.vx = -Math.abs(p.vx); }
-      if (p.y < 10 + r) { p.y = 10 + r; p.vy = Math.abs(p.vy); }
-      if (p.y > ARENA_H - 10 - r) { p.y = ARENA_H - 10 - r; p.vy = -Math.abs(p.vy); }
+      if (p.x < 10 + r) { p.x = 10 + r; if (p.ix < 0) p.ix = Math.abs(p.ix); }
+      if (p.x > ARENA_W - 10 - r) { p.x = ARENA_W - 10 - r; if (p.ix > 0) p.ix = -Math.abs(p.ix); }
+      if (p.y < 10 + r) { p.y = 10 + r; if (p.iy < 0) p.iy = Math.abs(p.iy); }
+      if (p.y > ARENA_H - 10 - r) { p.y = ARENA_H - 10 - r; if (p.iy > 0) p.iy = -Math.abs(p.iy); }
     }
 
     // Round lifecycle
@@ -199,6 +209,8 @@ export class GameRoom extends DurableObject<Env> {
           p.eliminated = true;
           p.vx = 0;
           p.vy = 0;
+          p.ix = 0;
+          p.iy = 0;
         }
       }
 
@@ -236,6 +248,9 @@ export class GameRoom extends DurableObject<Env> {
       p.y = pos.y;
       p.vx = 0;
       p.vy = 0;
+      p.ix = 0;
+      p.iy = 0;
+      p.heading = Math.random() * Math.PI * 2;
       p.hp = MAX_HP;
       p.eliminated = false;
       p.boostTicks = 0;
@@ -301,7 +316,9 @@ export class GameRoom extends DurableObject<Env> {
         y: pos.y,
         vx: 0,
         vy: 0,
-        heading: 0,
+        ix: 0,
+        iy: 0,
+        heading: Math.random() * Math.PI * 2,
         boostTicks: 0,
         hp: MAX_HP,
         // Mid-round joiners spectate
